@@ -1,0 +1,249 @@
+---
+title: "Growth and Institutions"
+author: "Augusto Gonzalez Bonorino"
+date: 'Sys.Date()'
+---
+
+
+```{r}
+library(readxl)
+library(tidyverse)
+
+# source: https://www.rug.nl/ggdc/historicaldevelopment/maddison/releases/maddison-project-database-2023?lang=en
+maddison_project <- read_excel(file.choose(), sheet = "Full data")
+head(data)
+```
+
+```{r}
+# data missing for Singapore (1940-1949)
+filtered_maddison <- maddison_project %>%
+  filter(country %in% c("United States", "Argentina", "Singapore")) %>%
+  filter(year > 1850 & year < 2018)
+
+head(filtered_maddison)
+```
+
+
+```{r}
+# source: https://www.systemicpeace.org/inscrdata.html
+polity_iv <- read_excel(file.choose())
+head(polity_iv)
+```
+
+```{r}
+filtered_polity_iv <- polity_iv %>%
+  filter(country %in% c("United States", "Argentina", "Singapore")) %>%
+  filter(year > 1900 & year < 2018) %>%
+  select(ccode, country, year, democ, autoc, polity2, durable, xconst, parcomp, exrec, regtrans, sf)
+```
+
+```{r}
+# download filtered_maddison to avoid dependency on full datasets
+write_csv(filtered_maddison, "filtered_maddison.csv")
+write_csv(filtered_polity_iv, "filtered_polity_iv.csv")
+```
+
+# FILTERED DATASETS - ANALYSIS
+
+[Polity IV codebook](https://web.mit.edu/efogg/Public/PolisciLab/Data/p4manualv2006.pdf)
+
+```{r}
+# set working directory
+setwd("C:/Users/Bonoc/OneDrive/PhD_applications/George Mason")
+```
+
+
+```{r}
+maddison_data <- read_csv("filtered_maddison.csv")
+polity_data <- read_csv("filtered_polity_iv.csv")
+```
+
+```{r}
+# impute missing gdppc values for Singapore
+library(zoo)
+
+maddison_data <- maddison_data %>%
+  mutate(gdppc = ifelse(is.na(gdppc) & country == "Singapore", 
+                        na.approx(gdppc, rule=2, na.rm = FALSE), 
+                        gdppc)) %>%
+  select(country, year, gdppc)
+
+```
+
+```{r}
+# merge the datasets
+merged_data <- maddison_data %>%
+  left_join(polity_data, by = c("country", "year"))
+```
+
+
+```{r}
+library(strucchange)
+
+# Bai-Perron test to identify structural breaks in Argentina
+argentina <- merged_data %>% filter(country == "Argentina")
+bp_arg <- breakpoints(log(gdppc) ~ 1, data = argentina, h = 0.15)
+print(bp_arg)
+plot(bp_arg)  
+
+# Optimal breaks at 1923, 1946, 1965, 1997
+```
+
+Historical Alignment:
+
+- 1923: Post-WWI economic turbulence and early protectionist policies. Dawn of military coup that took place in 1930.
+
+- 1946: Rise of Peronism and import substitution industrialization (ISI).
+
+- 1965: Political instability preceding the 1966 military coup.
+
+- 1997: Prelude to the 2001 default and currency crisis.
+
+## Regression analysis
+
+I am missing institutional variables for Singapore before 1965, so I will analyze Argentina and Singapore separately using United States as a comparison baseline.
+
+```{r}
+# Argentina (full data)
+model_arg <- lm(log(gdppc) ~ polity2 + durable, data = argentina)
+summary(model_arg)
+```
+
+```{r}
+# Singapore (1965–2017 only)
+singapore <- merged_data %>% filter(country == "Singapore") %>% filter(year >= 1965)
+model_sgp <- lm(log(gdppc) ~ polity2 + durable, data = singapore)
+summary(model_sgp)
+```
+
+```{r}
+usa <- merged_data %>% filter(country == "United States")
+model_usa <- lm(log(gdppc) ~ polity2 + durable, data = usa)
+summary(model_usa)
+```
+
+
+```{r}
+# test if institutional effects differ across countries
+model_global <- lm(log(gdppc) ~ polity2 * country + durable * country, 
+                  data = merged_data)
+summary(model_global)
+```
+
+
+```{r fig.width=10, fig.height=5}
+# Custom labels for facets
+facet_labels <- c(
+  "gdppc" = "GDP per Capita",
+  "polity2" = "Polity2 Score (-10 to 10)",
+  "durable" = "Regime Durability"
+)
+
+# Convert data to long format and plot
+merged_data %>%
+  filter(country == "Argentina") %>%
+  select(year, gdppc, polity2, durable) %>%
+  pivot_longer(
+    cols = -year,
+    names_to = "metric",
+    values_to = "value"
+  ) %>%
+  ggplot(aes(x = year, y = value)) +
+  geom_line(aes(color = metric), linewidth = 1) +
+  facet_wrap(
+    ~ metric,
+    nrow = 1,
+    scales = "free_y",
+    labeller = labeller(metric = facet_labels)
+  ) +
+  scale_color_manual(
+    values = c("gdppc" = "blue", "polity2" = "red", "durable" = "black")
+  ) +
+  labs(
+    title = "Argentina: Key Metrics (1901–2017)",
+    x = "Year",
+    caption = "GDP: Maddison Project\nInstitutional Data: Polity IV\nPolity2: -10 (autocracy) to +10 (democracy).\nDurability: Years since last regime change (defined as a 3+ point change in polity2 score)."
+  ) +
+  theme_minimal() +
+  theme(
+    legend.position = "none",
+    strip.text = element_text(face = "bold")
+  )
+```
+
+
+```{r fig.width=10, fig.height=5}
+# Convert data to long format and plot
+merged_data %>%
+  filter(country == "Singapore") %>%
+  select(year, gdppc, polity2, durable) %>%
+  pivot_longer(
+    cols = -year,
+    names_to = "metric",
+    values_to = "value"
+  ) %>%
+  ggplot(aes(x = year, y = value)) +
+  geom_line(aes(color = metric), linewidth = 1) +
+  facet_wrap(
+    ~ metric,
+    nrow = 1,
+    scales = "free_y",
+    labeller = labeller(metric = facet_labels)
+  ) +
+  scale_color_manual(
+    values = c("gdppc" = "blue", "polity2" = "red", "durable" = "black")
+  ) +
+  labs(
+    title = "Singapore: Key Metrics (1901–2017)",
+    x = "Year",
+    caption = "GDP: Maddison Project\nInstitutional Data: Polity IV\nPolity2: -10 (autocracy) to +10 (democracy).\nDurability: Years since last regime change (defined as a 3+ point change in polity2 score)."
+  ) +
+  theme_minimal() +
+  theme(
+    legend.position = "none",
+    strip.text = element_text(face = "bold")
+  )
+```
+
+
+```{r fig.width=8, fig.height=5}
+# gdppc for each country
+merged_data %>%
+  ggplot(aes(x = year, y = log(gdppc), color = country)) +
+  geom_line() +
+  labs(title = "GDP per Capita by Country (1901–2017)", 
+       x = "Year", y = "Log GDP per Capita",
+       caption="Data: Maddison Project Database. Note: Singapore's pre-1965 GDPpc includes interpolated values (1940–1949 missing)") +
+  theme_minimal()
+```
+
+```{r}
+gdp_share
+```
+
+
+```{r}
+# countries' gdp per capita as a share of USA gdp per capita over time
+usa_gdppc <- merged_data %>% filter(country == "United States") %>% pull(gdppc)
+argentina_gdppc <- merged_data %>% filter(country == "Argentina") %>% pull(gdppc)
+singapore_gdppc <- merged_data %>% filter(country == "Singapore") %>% pull(gdppc)
+
+gdp_share <- data.frame(
+  year = merged_data$year,
+  argentina = argentina_gdppc / usa_gdppc,
+  singapore = singapore_gdppc / usa_gdppc
+)
+
+gdp_share %>%
+  ggplot(aes(x = year)) +
+  geom_line(aes(y = argentina, color="Argentina"), linetype = "dashed") +
+  geom_line(aes(y = singapore, color="Singapore"), linetype = "dotted") +
+  labs(title = "GDP per Capita as Share of USA (1901–2017)", x = "Year", y = "GDP per Capita Share") +
+  scale_color_manual(values = c("Argentina" = "darkblue", "Singapore" = "darkgreen")) +
+  theme_minimal()
+  
+```
+
+
+
+
